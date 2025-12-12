@@ -8,7 +8,6 @@ class BookingDB(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
-    # These are the "Logical Foreign Keys"
     user_id = Column(String(36), nullable=False)
     listing_id = Column(String(36), nullable=False)
     

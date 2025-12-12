@@ -160,6 +160,20 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
         "preferences_info": "Mock Preferences Data" if isinstance(prefs_rsp, Exception) else prefs_rsp.json()
     }
 
+# delete booking
+@app.delete("/bookings/{booking_id}", status_code=204)
+def delete_booking(booking_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a booking from the composite service
+    """
+    booking = db.query(BookingDB).filter(BookingDB.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    
+    db.delete(booking)
+    db.commit()
+    return None
+
 # -----------------------------------------------------------------------------
 # Entrypoint for `python main.py`
 # -----------------------------------------------------------------------------
