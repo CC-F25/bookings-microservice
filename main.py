@@ -86,7 +86,7 @@ def get_health_with_path(
 # Configuration: Load URLs for ALL Atomic Services
 USERS_URL = os.environ.get("USERS_SERVICE_URL")
 LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL")
-PREFS_URL = os.environ.get("PREFERENCES_SERVICE_URL")
+PREFERENCES_URL = os.environ.get("PREFERENCES_SERVICE_URL")
 
 Base.metadata.create_all(bind=engine)
 
@@ -111,13 +111,15 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
         print(f"WARNING: Mocking Listing Check for {booking.listing_id}")
 
         # CHECK 3: Validate Preferences
-        """
-        prefs_rsp = await client.get(f"{PREFS_URL}/preferences/{booking.user_id}")
-        if prefs_rsp.status_code == 404:
-             # Optional: Maybe we warn them, or maybe we block them?
-             print("User has no preferences set.")
-        """
-        print(f"WARNING: Mocking Preferences Check for User {booking.user_id}")
+        try:
+            if PREFERENCES_URL:
+                prefs_rsp = await client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
+                if prefs_rsp.status_code == 200:
+                    print(f"Preferences found for user {booking.user_id}")
+                else:
+                    print(f"Preferences check failed with {prefs_rsp.status_code} (Ignoring)")
+        except Exception as e:
+            print(f"WARNING: Preferences Service unreachable: {e}")
 
     # Create Booking in Local DB
     new_booking = BookingDB(
@@ -144,7 +146,7 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
         # Define the tasks
         task_user = client.get(f"{USERS_URL}/users/{booking.user_id}")
         task_listing = client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
-        task_prefs = client.get(f"{PREFS_URL}/preferences/{booking.user_id}")
+        task_prefs = client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
 
         # Execute all 3 at once
         responses = await asyncio.gather(task_user, task_listing, task_prefs, return_exceptions=True)
