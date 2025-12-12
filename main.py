@@ -90,9 +90,7 @@ PREFS_URL = os.environ.get("PREFERENCES_SERVICE_URL")
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Bookings Composite Service")
-
-# Create Booking (Logical Foreign Keys with Validation)
+# Create Booking with Logical Foreign Keys with Validation
 @app.post("/bookings", response_model=BookingRead, status_code=201)
 async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
     async with httpx.AsyncClient() as client:
@@ -132,8 +130,7 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
     
     return new_booking
 
-# Composite Data Aggregation (Parallel Execution)
-# This satisfies the "Use threads/async for parallel execution" requirement
+# Composite Data Aggregation with Parallel Execution
 @app.get("/bookings/{booking_id}/details")
 async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
     
@@ -149,8 +146,7 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
         task_listing = client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
         task_prefs = client.get(f"{PREFS_URL}/preferences/{booking.user_id}")
 
-        # Execute all 3 at once (Parallel)
-        # return_exceptions=True so one failure doesn't crash the whole request
+        # Execute all 3 at once
         responses = await asyncio.gather(task_user, task_listing, task_prefs, return_exceptions=True)
         
         user_rsp, listing_rsp, prefs_rsp = responses
