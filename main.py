@@ -18,7 +18,7 @@ from models.bookings import BookingCreate, BookingRead
 from sqlalchemy.orm import Session
 
 from database_connection import Base, engine, get_db
-from models.booking_sql import BookingDB
+from models.bookings_sql import BookingDB
 
 port = int(os.environ.get("FASTAPIPORT", 8000))
 
@@ -96,10 +96,20 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
     async with httpx.AsyncClient() as client:
         # CHECK 1: Validate User
         try:
+            print(f"DEBUG: Verifying user {booking.user_id} at {USERS_URL}")
             user_rsp = await client.get(f"{USERS_URL}/users/{booking.user_id}")
+            
+            # If User doesn't exist (404), raise error
             if user_rsp.status_code == 404:
                 raise HTTPException(status_code=404, detail="User not found")
-        except httpx.RequestError:
+            
+            # If User ID is invalid (422) or Server Error (500), raise error
+            if user_rsp.status_code != 200:
+                print(f"DEBUG: User validation failed with status {user_rsp.status_code}: {user_rsp.text}")
+                raise HTTPException(status_code=400, detail=f"User Validation Failed: {user_rsp.text}")
+
+        except httpx.RequestError as e:
+             print(f"CRITICAL: Could not connect to Users Service: {e}")
              raise HTTPException(status_code=503, detail="Users Service Unavailable")
 
         # CHECK 2: Validate Listing
