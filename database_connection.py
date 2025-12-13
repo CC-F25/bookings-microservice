@@ -41,7 +41,6 @@ else:
         port=db_port,
         database=db_name
     )
-    print(db_pass)
 
 # CREATE ENGINE
 engine = create_engine(connection_url)
