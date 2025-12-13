@@ -172,6 +172,16 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
         "preferences_info": "Mock Preferences Data" if isinstance(prefs_rsp, Exception) else prefs_rsp.json()
     }
 
+# Get ALL bookings for a specific user
+@app.get("/bookings/user/{user_id}")
+def get_user_bookings(user_id: str, db: Session = Depends(get_db)):
+    # Query the local database for all rows with this user_id
+    user_bookings = db.query(BookingDB).filter(BookingDB.user_id == user_id).all()
+    
+    # Return the list
+    return user_bookings
+
+
 # delete booking
 @app.delete("/bookings/{booking_id}", status_code=204)
 def delete_booking(booking_id: str, db: Session = Depends(get_db)):
