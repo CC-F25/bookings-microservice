@@ -4,33 +4,71 @@ import os
 import socket
 from datetime import datetime
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
-from fastapi import Query, Path
-from typing import Optional
+import httpx
+import asyncio
 
-from models.person import PersonCreate, PersonRead, PersonUpdate
-from models.address import AddressCreate, AddressRead, AddressUpdate
+from fastapi import FastAPI, HTTPException, Query, Path, Depends
+import uvicorn
 from models.health import Health
+from models.bookings import BookingCreate, BookingRead
 
-port = int(os.environ.get("FASTAPIPORT", 8000))
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+from database_connection import Base, engine, get_db
+from models.bookings_sql import BookingDB
+
+port = int(os.environ.get("FASTAPIPORT", 8080))
 
 # -----------------------------------------------------------------------------
-# Fake in-memory "databases"
+# FastAPI app
 # -----------------------------------------------------------------------------
-persons: Dict[UUID, PersonRead] = {}
-addresses: Dict[UUID, AddressRead] = {}
-
 app = FastAPI(
-    title="Person/Address API",
-    description="Demo FastAPI app using Pydantic v2 models for Person and Address",
+    title="Bookings API",
+    description="FastAPI app using Pydantic v2 models for Bookings Microservice",
     version="0.1.0",
 )
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5000",                     # Firebase local emulator
+        "https://cloud-computing-ui.web.app",        # deployed Firebase site
+        "https://cloud-computing-ui.firebaseapp.com" # alt Firebase domain
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # -----------------------------------------------------------------------------
-# Address endpoints
+# Root
+# -----------------------------------------------------------------------------
+@app.get("/")
+def root():
+    return {"message": "Welcome to the Bookings API. See /docs for OpenAPI UI."}
+
+
+# -----------------------------------------------------------------------------
+# test-db endpoint
+# -----------------------------------------------------------------------------
+
+@app.get("/test-db")
+def test_db_connection(db: Session = Depends(get_db)):
+    try:
+        # run a simple query to test the connection
+        result = db.execute(text("SELECT 1")).fetchone()
+        return {"status": "success", "result": result[0]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+# -----------------------------------------------------------------------------
+# Health endpoints
 # -----------------------------------------------------------------------------
 
 def make_health(echo: Optional[str], path_echo: Optional[str]=None) -> Health:
@@ -55,121 +93,126 @@ def get_health_with_path(
 ):
     return make_health(echo=echo, path_echo=path_echo)
 
-@app.post("/addresses", response_model=AddressRead, status_code=201)
-def create_address(address: AddressCreate):
-    if address.id in addresses:
-        raise HTTPException(status_code=400, detail="Address with this ID already exists")
-    addresses[address.id] = AddressRead(**address.model_dump())
-    return addresses[address.id]
-
-@app.get("/addresses", response_model=List[AddressRead])
-def list_addresses(
-    street: Optional[str] = Query(None, description="Filter by street"),
-    city: Optional[str] = Query(None, description="Filter by city"),
-    state: Optional[str] = Query(None, description="Filter by state/region"),
-    postal_code: Optional[str] = Query(None, description="Filter by postal code"),
-    country: Optional[str] = Query(None, description="Filter by country"),
-):
-    results = list(addresses.values())
-
-    if street is not None:
-        results = [a for a in results if a.street == street]
-    if city is not None:
-        results = [a for a in results if a.city == city]
-    if state is not None:
-        results = [a for a in results if a.state == state]
-    if postal_code is not None:
-        results = [a for a in results if a.postal_code == postal_code]
-    if country is not None:
-        results = [a for a in results if a.country == country]
-
-    return results
-
-@app.get("/addresses/{address_id}", response_model=AddressRead)
-def get_address(address_id: UUID):
-    if address_id not in addresses:
-        raise HTTPException(status_code=404, detail="Address not found")
-    return addresses[address_id]
-
-@app.patch("/addresses/{address_id}", response_model=AddressRead)
-def update_address(address_id: UUID, update: AddressUpdate):
-    if address_id not in addresses:
-        raise HTTPException(status_code=404, detail="Address not found")
-    stored = addresses[address_id].model_dump()
-    stored.update(update.model_dump(exclude_unset=True))
-    addresses[address_id] = AddressRead(**stored)
-    return addresses[address_id]
 
 # -----------------------------------------------------------------------------
-# Person endpoints
+# Bookings endpoints
 # -----------------------------------------------------------------------------
-@app.post("/persons", response_model=PersonRead, status_code=201)
-def create_person(person: PersonCreate):
-    # Each person gets its own UUID; stored as PersonRead
-    person_read = PersonRead(**person.model_dump())
-    persons[person_read.id] = person_read
-    return person_read
 
-@app.get("/persons", response_model=List[PersonRead])
-def list_persons(
-    uni: Optional[str] = Query(None, description="Filter by Columbia UNI"),
-    first_name: Optional[str] = Query(None, description="Filter by first name"),
-    last_name: Optional[str] = Query(None, description="Filter by last name"),
-    email: Optional[str] = Query(None, description="Filter by email"),
-    phone: Optional[str] = Query(None, description="Filter by phone number"),
-    birth_date: Optional[str] = Query(None, description="Filter by date of birth (YYYY-MM-DD)"),
-    city: Optional[str] = Query(None, description="Filter by city of at least one address"),
-    country: Optional[str] = Query(None, description="Filter by country of at least one address"),
-):
-    results = list(persons.values())
+# Configuration: Load URLs for ALL Atomic Services
+USERS_URL = os.environ.get("USERS_SERVICE_URL")
+LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL")
+PREFERENCES_URL = os.environ.get("PREFERENCES_SERVICE_URL")
 
-    if uni is not None:
-        results = [p for p in results if p.uni == uni]
-    if first_name is not None:
-        results = [p for p in results if p.first_name == first_name]
-    if last_name is not None:
-        results = [p for p in results if p.last_name == last_name]
-    if email is not None:
-        results = [p for p in results if p.email == email]
-    if phone is not None:
-        results = [p for p in results if p.phone == phone]
-    if birth_date is not None:
-        results = [p for p in results if str(p.birth_date) == birth_date]
+Base.metadata.create_all(bind=engine)
 
-    # nested address filtering
-    if city is not None:
-        results = [p for p in results if any(addr.city == city for addr in p.addresses)]
-    if country is not None:
-        results = [p for p in results if any(addr.country == country for addr in p.addresses)]
+# Create Booking with Logical Foreign Keys with Validation
+@app.post("/bookings", response_model=BookingRead, status_code=201)
+async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
+    async with httpx.AsyncClient() as client:
+        # CHECK 1: Validate User
+        try:
+            print(f"DEBUG: Verifying user {booking.user_id} at {USERS_URL}")
+            user_rsp = await client.get(f"{USERS_URL}/users/{booking.user_id}")
+            
+            # If User doesn't exist (404), raise error
+            if user_rsp.status_code == 404:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # If User ID is invalid (422) or Server Error (500), raise error
+            if user_rsp.status_code != 200:
+                print(f"DEBUG: User validation failed with status {user_rsp.status_code}: {user_rsp.text}")
+                raise HTTPException(status_code=400, detail=f"User Validation Failed: {user_rsp.text}")
 
-    return results
+        except httpx.RequestError as e:
+             print(f"CRITICAL: Could not connect to Users Service: {e}")
+             raise HTTPException(status_code=503, detail="Users Service Unavailable")
 
-@app.get("/persons/{person_id}", response_model=PersonRead)
-def get_person(person_id: UUID):
-    if person_id not in persons:
-        raise HTTPException(status_code=404, detail="Person not found")
-    return persons[person_id]
+        # CHECK 2: Validate Listing
+        """
+        listing_rsp = await client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
+        if listing_rsp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        """
+        print(f"WARNING: Mocking Listing Check for {booking.listing_id}")
 
-@app.patch("/persons/{person_id}", response_model=PersonRead)
-def update_person(person_id: UUID, update: PersonUpdate):
-    if person_id not in persons:
-        raise HTTPException(status_code=404, detail="Person not found")
-    stored = persons[person_id].model_dump()
-    stored.update(update.model_dump(exclude_unset=True))
-    persons[person_id] = PersonRead(**stored)
-    return persons[person_id]
+        # CHECK 3: Validate Preferences
+        try:
+            if PREFERENCES_URL:
+                prefs_rsp = await client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
+                if prefs_rsp.status_code == 200:
+                    print(f"Preferences found for user {booking.user_id}")
+                else:
+                    print(f"Preferences check failed with {prefs_rsp.status_code} (Ignoring)")
+        except Exception as e:
+            print(f"WARNING: Preferences Service unreachable: {e}")
 
-# -----------------------------------------------------------------------------
-# Root
-# -----------------------------------------------------------------------------
-@app.get("/")
-def root():
-    return {"message": "Welcome to the Person/Address API. See /docs for OpenAPI UI."}
+    # Create Booking in Local DB
+    new_booking = BookingDB(
+        user_id=booking.user_id,
+        listing_id=booking.listing_id
+    )
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
+    
+    return new_booking
+
+# Composite Data Aggregation with Parallel Execution
+@app.get("/bookings/{booking_id}/details")
+async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
+    
+    # Get local booking data
+    booking = db.query(BookingDB).filter(BookingDB.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    # Fetch data from ALL Atomic Services in Parallel
+    async with httpx.AsyncClient() as client:
+        # Define the tasks
+        task_user = client.get(f"{USERS_URL}/users/{booking.user_id}")
+        task_listing = client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
+        task_prefs = client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
+
+        # Execute all 3 at once
+        responses = await asyncio.gather(task_user, task_listing, task_prefs, return_exceptions=True)
+        
+        user_rsp, listing_rsp, prefs_rsp = responses
+
+    # Construct the Composite Response
+    return {
+        "booking_info": booking,
+        # Check if the calls succeeded before accessing .json()
+        "user_info": user_rsp.json() if not isinstance(user_rsp, Exception) and user_rsp.status_code == 200 else "Unavailable",
+        "listing_info": "Mock Listing Data" if isinstance(listing_rsp, Exception) else listing_rsp.json(),
+        "preferences_info": "Mock Preferences Data" if isinstance(prefs_rsp, Exception) else prefs_rsp.json()
+    }
+
+# Get ALL bookings for a specific user
+@app.get("/bookings/user/{user_id}")
+def get_user_bookings(user_id: str, db: Session = Depends(get_db)):
+    # Query the local database for all rows with this user_id
+    user_bookings = db.query(BookingDB).filter(BookingDB.user_id == user_id).all()
+    
+    # Return the list
+    return user_bookings
+
+
+# delete booking
+@app.delete("/bookings/{booking_id}", status_code=204)
+def delete_booking(booking_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a booking from the composite service
+    """
+    booking = db.query(BookingDB).filter(BookingDB.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    
+    db.delete(booking)
+    db.commit()
+    return None
 
 # -----------------------------------------------------------------------------
 # Entrypoint for `python main.py`
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    import uvicorn
-
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
