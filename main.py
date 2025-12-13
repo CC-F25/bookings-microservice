@@ -16,11 +16,12 @@ from models.health import Health
 from models.bookings import BookingCreate, BookingRead
 
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from database_connection import Base, engine, get_db
 from models.bookings_sql import BookingDB
 
-port = int(os.environ.get("FASTAPIPORT", 8000))
+port = int(os.environ.get("FASTAPIPORT", 8080))
 
 # -----------------------------------------------------------------------------
 # FastAPI app
@@ -52,6 +53,20 @@ app.add_middleware(
 def root():
     return {"message": "Welcome to the Bookings API. See /docs for OpenAPI UI."}
 
+
+# -----------------------------------------------------------------------------
+# test-db endpoint
+# -----------------------------------------------------------------------------
+
+@app.get("/test-db")
+def test_db_connection(db: Session = Depends(get_db)):
+    try:
+        # run a simple query to test the connection
+        result = db.execute(text("SELECT 1")).fetchone()
+        return {"status": "success", "result": result[0]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
 # -----------------------------------------------------------------------------
 # Health endpoints
 # -----------------------------------------------------------------------------

@@ -14,5 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Cloud Run expects the app to listen on port 8080
-# This command explicitly binds it to 0.0.0.0 so the world can access it
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "main.py"]
