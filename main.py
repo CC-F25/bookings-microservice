@@ -21,8 +21,28 @@ from sqlalchemy import text
 from database_connection import Base, engine, get_db
 from models.bookings_sql import BookingDB
 
+from fastapi import Header
+from jose import jwt, JWTError
+
 port = int(os.environ.get("FASTAPIPORT", 8080))
 
+
+# -----------------------------------------------------------------------------
+# JWT Authentication
+# AUTH CONFIGURATION
+JWT_SECRET = os.environ.get("JWT_SECRET", "my_super_secret_key")
+JWT_ALGO = "HS256"
+
+def require_auth(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
+    token = authorization.replace("Bearer ", "")
+    try:
+        # This verifies the signature using the SHARED secret
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 # -----------------------------------------------------------------------------
 # FastAPI app
 # -----------------------------------------------------------------------------
@@ -101,13 +121,17 @@ def get_health_with_path(
 # Configuration: Load URLs for ALL Atomic Services
 USERS_URL = os.environ.get("USERS_SERVICE_URL")
 LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL")
-PREFERENCES_URL = os.environ.get("PREFERENCES_SERVICE_URL")
 
 Base.metadata.create_all(bind=engine)
 
 # Create Booking with Logical Foreign Keys with Validation
 @app.post("/bookings", response_model=BookingRead, status_code=201)
-async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
+async def create_booking(booking: BookingCreate, db: Session = Depends(get_db), token_payload: dict = Depends(require_auth)):
+
+    user_id_from_token = token_payload.get("sub")
+    if user_id_from_token != booking.user_id:
+        raise HTTPException(status_code=403, detail="You cannot book for someone else")
+
     async with httpx.AsyncClient() as client:
         # CHECK 1: Validate User
         try:
@@ -135,21 +159,11 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
         """
         print(f"WARNING: Mocking Listing Check for {booking.listing_id}")
 
-        # CHECK 3: Validate Preferences
-        try:
-            if PREFERENCES_URL:
-                prefs_rsp = await client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
-                if prefs_rsp.status_code == 200:
-                    print(f"Preferences found for user {booking.user_id}")
-                else:
-                    print(f"Preferences check failed with {prefs_rsp.status_code} (Ignoring)")
-        except Exception as e:
-            print(f"WARNING: Preferences Service unreachable: {e}")
-
     # Create Booking in Local DB
     new_booking = BookingDB(
         user_id=booking.user_id,
-        listing_id=booking.listing_id
+        listing_id=booking.listing_id,
+        booking_date=booking.booking_date
     )
     db.add(new_booking)
     db.commit()
@@ -166,26 +180,24 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    # Fetch data from ALL Atomic Services in Parallel
+    # Fetch data from Atomic Services (Users + Listings)
     async with httpx.AsyncClient() as client:
         # Define the tasks
         task_user = client.get(f"{USERS_URL}/users/{booking.user_id}")
         task_listing = client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
-        task_prefs = client.get(f"{PREFERENCES_URL}/preferences/{booking.user_id}")
 
-        # Execute all 3 at once
-        responses = await asyncio.gather(task_user, task_listing, task_prefs, return_exceptions=True)
+        # Execute both at once
+        responses = await asyncio.gather(task_user, task_listing, return_exceptions=True)
         
-        user_rsp, listing_rsp, prefs_rsp = responses
+        user_rsp, listing_rsp = responses
 
     # Construct the Composite Response
     return {
         "booking_info": booking,
-        # Check if the calls succeeded before accessing .json()
         "user_info": user_rsp.json() if not isinstance(user_rsp, Exception) and user_rsp.status_code == 200 else "Unavailable",
-        "listing_info": "Mock Listing Data" if isinstance(listing_rsp, Exception) else listing_rsp.json(),
-        "preferences_info": "Mock Preferences Data" if isinstance(prefs_rsp, Exception) else prefs_rsp.json()
+        "listing_info": listing_rsp.json() if not isinstance(listing_rsp, Exception) and listing_rsp.status_code == 200 else "Unavailable"
     }
+# Composite Data Aggregation with Parallel Execution
 
 # Get ALL bookings for a specific user
 @app.get("/bookings/user/{user_id}")

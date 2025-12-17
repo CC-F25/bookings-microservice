@@ -10,6 +10,8 @@ class BookingDB(Base):
     
     user_id = Column(String(36), nullable=False)
     listing_id = Column(String(36), nullable=False)
-    
+
+    booking_date = Column(DateTime, nullable=False)
+
     status = Column(String(20), default="confirmed")
     created_at = Column(DateTime, default=datetime.utcnow)

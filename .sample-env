@@ -1,7 +1,6 @@
 # Atomic Microservices Links
 USERS_SERVICE_URL=
 LISTINGS_SERVICE_URL=
-PREFERENCES_SERVICE_URL=
 
 # Microservice configuration
 FASTAPIPORT=
