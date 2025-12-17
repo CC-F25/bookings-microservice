@@ -39,7 +39,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5000",                     # Firebase local emulator
         "https://cloud-computing-ui.web.app",        # deployed Firebase site
-        "https://cloud-computing-ui.firebaseapp.com" # alt Firebase domain
+        "https://cloud-computing-ui.firebaseapp.com", # alt Firebase domain
+        "http://localhost:8080",                     # Python http.server
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -82,14 +83,14 @@ def make_health(echo: Optional[str], path_echo: Optional[str]=None) -> Health:
     )
 
 @app.get("/health", response_model=Health)
-def get_health_no_path(echo: str | None = Query(None, description="Optional echo string")):
+def get_health_no_path(echo: Optional[str] = Query(None, description="Optional echo string")):
     # Works because path_echo is optional in the model
     return make_health(echo=echo, path_echo=None)
 
 @app.get("/health/{path_echo}", response_model=Health)
 def get_health_with_path(
     path_echo: str = Path(..., description="Required echo in the URL path"),
-    echo: str | None = Query(None, description="Optional echo string"),
+    echo: Optional[str] = Query(None, description="Optional echo string"),
 ):
     return make_health(echo=echo, path_echo=path_echo)
 
@@ -99,9 +100,11 @@ def get_health_with_path(
 # -----------------------------------------------------------------------------
 
 # Configuration: Load URLs for ALL Atomic Services
-USERS_URL = os.environ.get("USERS_SERVICE_URL")
-LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL")
-PREFERENCES_URL = os.environ.get("PREFERENCES_SERVICE_URL")
+# Configuration: Load URLs for ALL Atomic Services
+# Default to Localhost ports if Env Vars are missing
+USERS_URL = os.environ.get("USERS_SERVICE_URL", "http://localhost:8001")
+LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL", "http://localhost:8004")
+PREFERENCES_URL = os.environ.get("PREFERENCES_SERVICE_URL", "http://localhost:8003")
 
 Base.metadata.create_all(bind=engine)
 

@@ -21,7 +21,12 @@ if os.name == 'nt':
 
 # BUILD THE URL OBJECT SAFELY
 # This method automatically handles special characters like '@' in passwords
-if connection_name:
+
+# CHECK FOR OVERRIDE (e.g. SQLite for local testing)
+if os.environ.get("DATABASE_URL"):
+    connection_url = os.environ.get("DATABASE_URL")
+
+elif connection_name:
     # Cloud Run (Unix Socket)
     connection_url = URL.create(
         drivername="mysql+pymysql",
