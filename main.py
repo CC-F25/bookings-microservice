@@ -43,6 +43,26 @@ def require_auth(authorization: str = Header(None)):
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    
+
+# -----------------------------------------------------------------------------
+# Helper Functions (Synchronous for Threading)
+# -----------------------------------------------------------------------------
+
+def fetch_json(url: str):
+    """
+    Synchronous helper to be run in a separate thread
+    Used to demonstrate multi-threading parallelism
+    """
+    try:
+        # Use synchronous httpx.get (blocking I/O)
+        r = httpx.get(url, timeout=5.0)
+        if r.status_code != 200:
+            return "Unavailable"
+        return r.json()
+    except Exception:
+        return "Unavailable"
+    
 # -----------------------------------------------------------------------------
 # FastAPI app
 # -----------------------------------------------------------------------------
@@ -151,13 +171,18 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db), 
              print(f"CRITICAL: Could not connect to Users Service: {e}")
              raise HTTPException(status_code=503, detail="Users Service Unavailable")
 
-        # CHECK 2: Validate Listing
-        """
-        listing_rsp = await client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
-        if listing_rsp.status_code == 404:
-            raise HTTPException(status_code=404, detail="Listing not found")
-        """
-        print(f"WARNING: Mocking Listing Check for {booking.listing_id}")
+        # CHECK 2: Validate Listing (Logical Foreign Key)
+        try:
+            print(f"DEBUG: Verifying listing {booking.listing_id} at {LISTINGS_URL}")
+            listing_rsp = await client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
+            
+            if listing_rsp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Listing not found")
+            
+        except httpx.RequestError as e:
+            # This handles the case if the Listings Proxy is down
+            print(f"CRITICAL: Could not connect to Listings Service: {e}")
+            raise HTTPException(status_code=503, detail="Listings Service Unavailable")
 
     # Create Booking in Local DB
     new_booking = BookingDB(
@@ -171,7 +196,8 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db), 
     
     return new_booking
 
-# Composite Data Aggregation with Parallel Execution
+
+# Composite Data Aggregation with Parallel Execution using THREADS
 @app.get("/bookings/{booking_id}/details")
 async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
     
@@ -180,24 +206,20 @@ async def get_booking_details(booking_id: str, db: Session = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    # Fetch data from Atomic Services (Users + Listings)
-    async with httpx.AsyncClient() as client:
-        # Define the tasks
-        task_user = client.get(f"{USERS_URL}/users/{booking.user_id}")
-        task_listing = client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
+    # Use asyncio.to_thread to run the synchronous 'fetch_json' in separate THREADS
+    # This explicitly satisfies the requirement for "Parallel execution using threads"
+    user_task = asyncio.to_thread(fetch_json, f"{USERS_URL}/users/{booking.user_id}")
+    listing_task = asyncio.to_thread(fetch_json, f"{LISTINGS_URL}/listings/{booking.listing_id}")
 
-        # Execute both at once
-        responses = await asyncio.gather(task_user, task_listing, return_exceptions=True)
-        
-        user_rsp, listing_rsp = responses
+    # Run both threads concurrently and wait for results
+    user_info, listing_info = await asyncio.gather(user_task, listing_task)
 
     # Construct the Composite Response
     return {
         "booking_info": booking,
-        "user_info": user_rsp.json() if not isinstance(user_rsp, Exception) and user_rsp.status_code == 200 else "Unavailable",
-        "listing_info": listing_rsp.json() if not isinstance(listing_rsp, Exception) and listing_rsp.status_code == 200 else "Unavailable"
+        "user_info": user_info,  
+        "listing_info": listing_info 
     }
-# Composite Data Aggregation with Parallel Execution
 
 # Get ALL bookings for a specific user
 @app.get("/bookings/user/{user_id}")
@@ -222,6 +244,41 @@ def delete_booking(booking_id: str, db: Session = Depends(get_db)):
     db.delete(booking)
     db.commit()
     return None
+
+# ---------------------------------------------------------------------------
+# ATOMIC SERVICE DELEGATION (Encapsulate & Expose)
+# ---------------------------------------------------------------------------
+
+@app.get("/users/{user_id}")
+async def get_user_proxy(user_id: str):
+    """
+    Proxy endpoint to expose Users Service API via the Composite Service.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            # Delegate to the Atomic Users Service
+            resp = await client.get(f"{USERS_URL}/users/{user_id}")
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="User not found")
+            return resp.json()
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Users Service Unavailable")
+
+@app.get("/listings/{listing_id}")
+async def get_listing_proxy(listing_id: str):
+    """
+    Proxy endpoint to expose Listings Service API via the Composite Service.
+    Delegates to the existing Listings Proxy/Service.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            # Delegate to the Atomic Listings Service
+            resp = await client.get(f"{LISTINGS_URL}/listings/{listing_id}")
+            if resp.status_code == 404:
+                raise HTTPException(status_code=404, detail="Listing not found")
+            return resp.json()
+        except httpx.RequestError:
+            raise HTTPException(status_code=503, detail="Listings Service Unavailable")
 
 # -----------------------------------------------------------------------------
 # Entrypoint for `python main.py`
