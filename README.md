@@ -48,10 +48,24 @@ Paste in powershell
 `gcloud builds submit --tag gcr.io/<\image name>`
 (Wait for this to finish and say "SUCCESS")
 
-3) Paste in powershell
+3) Paste in powershell with the actual values
 
-`gcloud run deploy bookings-microservice --image gcr.io/<\image name> --platform managed --region us-central1 --allow-unauthenticated --add-cloudsql-instances <\image name>:us-central1:users-db-instance --set-env-vars "MYSQL_USER=<\user name>,MYSQL_PASSWORD=<\password>|,MYSQL_DB=bookings_db,INSTANCE_CONNECTION_NAME=<\instance name>`
-
+```powershell
+gcloud run deploy <service-name> `
+  --image gcr.io/<project-id>/<image-name> `
+  --platform managed `
+  --region <region> `
+  --allow-unauthenticated `
+  --add-cloudsql-instances <project-id>:<region>:<cloudsql-instance-name> `
+  --set-env-vars "MYSQL_USER=<mysql-user>" `
+  --set-env-vars "MYSQL_PASSWORD=<mysql-password>" `
+  --set-env-vars "MYSQL_DB=<mysql-db-name>" `
+  --set-env-vars "INSTANCE_CONNECTION_NAME=<project-id>:<region>:<cloudsql-instance-name>" `
+  --set-env-vars "USERS_SERVICE_URL=<users-service-url>" `
+  --set-env-vars "LISTINGS_SERVICE_URL=<listings-service-url>" `
+  --set-env-vars "JWT_SECRET=<jwt-secret>" `
+  --set-env-vars "FASTAPIPORT=<port>"
+ ``` 
 4) Testing connection
 
 How to test:
