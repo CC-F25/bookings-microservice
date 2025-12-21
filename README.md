@@ -26,11 +26,10 @@ alternatively-
 
 # Models and the CRUD Operations:
 
-1) Health (default)
-2) Bookings
+1) Bookings
 
 
-## All models have: 
+## The bookings model has the following endpoints: 
 ii. **POST** `/<resource>`  
 iii. **GET** `/<resource>/{id}/{user_id}`  
 iv. **PUT** `/<resource>/{id}`  

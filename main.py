@@ -16,7 +16,7 @@ from models.health import Health
 from models.bookings import BookingCreate, BookingRead
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, and_
 
 from database_connection import Base, engine, get_db
 from models.bookings_sql import BookingDB
@@ -106,36 +106,9 @@ def test_db_connection(db: Session = Depends(get_db)):
         return {"status": "success", "result": result[0]}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
-# -----------------------------------------------------------------------------
-# Health endpoints
-# -----------------------------------------------------------------------------
-
-def make_health(echo: Optional[str], path_echo: Optional[str]=None) -> Health:
-    return Health(
-        status=200,
-        status_message="OK",
-        timestamp=datetime.utcnow().isoformat() + "Z",
-        ip_address=socket.gethostbyname(socket.gethostname()),
-        echo=echo,
-        path_echo=path_echo
-    )
-
-@app.get("/health", response_model=Health)
-def get_health_no_path(echo: str | None = Query(None, description="Optional echo string")):
-    # Works because path_echo is optional in the model
-    return make_health(echo=echo, path_echo=None)
-
-@app.get("/health/{path_echo}", response_model=Health)
-def get_health_with_path(
-    path_echo: str = Path(..., description="Required echo in the URL path"),
-    echo: str | None = Query(None, description="Optional echo string"),
-):
-    return make_health(echo=echo, path_echo=path_echo)
-
 
 # -----------------------------------------------------------------------------
-# Bookings endpoints
+# Bookings configuration
 # -----------------------------------------------------------------------------
 
 # Configuration: Load URLs for ALL Atomic Services
@@ -143,6 +116,10 @@ USERS_URL = os.environ.get("USERS_SERVICE_URL")
 LISTINGS_URL = os.environ.get("LISTINGS_SERVICE_URL")
 
 Base.metadata.create_all(bind=engine)
+
+# -----------------------------------------------------------------------------
+# Bookings endpoints
+# -----------------------------------------------------------------------------
 
 # Create Booking with Logical Foreign Keys with Validation
 @app.post("/bookings", response_model=BookingRead, status_code=201)
@@ -152,36 +129,40 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db), 
     if user_id_from_token != booking.user_id:
         raise HTTPException(status_code=403, detail="You cannot book for someone else")
 
+    # Availability Check (Prevent Double Booking)
+    # Check if this listing is already booked for this specific date
+    existing_booking = db.query(BookingDB).filter(
+        and_(
+            BookingDB.listing_id == booking.listing_id,
+            BookingDB.booking_date == booking.booking_date
+        )
+    ).first()
+
+    if existing_booking:
+        # If the user trying to book is the same person who already booked it
+        if existing_booking.user_id == booking.user_id:
+            raise HTTPException(status_code=409, detail="You have already booked this listing for this date.")
+        # If someone else booked it
+        raise HTTPException(status_code=409, detail="This listing is unavailable for the selected date.")
+
     async with httpx.AsyncClient() as client:
         # CHECK 1: Validate User
         try:
-            print(f"DEBUG: Verifying user {booking.user_id} at {USERS_URL}")
             user_rsp = await client.get(f"{USERS_URL}/users/{booking.user_id}")
-            
-            # If User doesn't exist (404), raise error
             if user_rsp.status_code == 404:
                 raise HTTPException(status_code=404, detail="User not found")
-            
-            # If User ID is invalid (422) or Server Error (500), raise error
             if user_rsp.status_code != 200:
-                print(f"DEBUG: User validation failed with status {user_rsp.status_code}: {user_rsp.text}")
                 raise HTTPException(status_code=400, detail=f"User Validation Failed: {user_rsp.text}")
-
-        except httpx.RequestError as e:
-             print(f"CRITICAL: Could not connect to Users Service: {e}")
+        except httpx.RequestError:
              raise HTTPException(status_code=503, detail="Users Service Unavailable")
 
-        # CHECK 2: Validate Listing (Logical Foreign Key)
+        # CHECK 2: Validate Listing
         try:
-            print(f"DEBUG: Verifying listing {booking.listing_id} at {LISTINGS_URL}")
             listing_rsp = await client.get(f"{LISTINGS_URL}/listings/{booking.listing_id}")
-            
             if listing_rsp.status_code == 404:
                 raise HTTPException(status_code=404, detail="Listing not found")
-            
-        except httpx.RequestError as e:
-            # This handles the case if the Listings Proxy is down
-            print(f"CRITICAL: Could not connect to Listings Service: {e}")
+        except httpx.RequestError:
+            print(f"CRITICAL: Could not connect to Listings Service")
             raise HTTPException(status_code=503, detail="Listings Service Unavailable")
 
     # Create Booking in Local DB
@@ -195,7 +176,6 @@ async def create_booking(booking: BookingCreate, db: Session = Depends(get_db), 
     db.refresh(new_booking)
     
     return new_booking
-
 
 # Composite Data Aggregation with Parallel Execution using THREADS
 @app.get("/bookings/{booking_id}/details")
@@ -242,6 +222,20 @@ def delete_booking(booking_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Booking not found")
     
     db.delete(booking)
+    db.commit()
+    return None
+
+# Delete all bookings for a specific user (Cascading Delete Support)
+@app.delete("/bookings/user/{user_id}", status_code=204)
+def delete_all_user_bookings(user_id: str, db: Session = Depends(get_db)):
+    """
+    Deletes all bookings associated with a specific user ID.
+    This should be called when a User is deleted to ensure data consistency.
+    """
+    bookings = db.query(BookingDB).filter(BookingDB.user_id == user_id).all()
+    for booking in bookings:
+        db.delete(booking)
+    
     db.commit()
     return None
 
